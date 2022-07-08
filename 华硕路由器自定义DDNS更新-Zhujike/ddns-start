@@ -1,29 +1,12 @@
 #!/bin/sh
-# Hostker/Zhujike Dynamic DNS updater.
-
-# Configure
-
-# Hostker/Zhujike account Email
-EMAIL=${EMAIL:=aaa@bbb.com}
-
-# API token: https://i.hostker.com/account/api
-TOKEN=${TOKEN:=aaabbbcccdddeeefff}
-
-# One of these: https://i.zhujike.com/dns/showRecord/domain/
-# It needs to be pre-existing.
-DOMAIN=${DOMAIN:=aaabbbccc.moe}
-
-# Subdomain of $DOMAIN, or @ for the root.  Note: This script will not work if
-# you have multiple records with the same name.  We'll create the record if it
-# doesn't exist.
-HEADER=${HEADER:=header}
-
-#Custom TTL
-TTL=${TTL:=300}
-
-################################################################################
 
 set -e
+EMAIL=${EMAIL:=aaa@bbb.com}
+TOKEN=${TOKEN:=aaabbbcccdddeeefff}
+DOMAIN=${DOMAIN:=aaabbbccc.moe}
+HEADER=${HEADER:=header}
+TTL=${TTL:=300}
+JSON_sh="$(dirname "$0")/JSON.sh"
 
 fail() {
 	echo "$0: $@" >&2
@@ -31,49 +14,9 @@ fail() {
 	exit 1
 }
 
-JSON_sh="$(dirname "$0")/JSON.sh"
-
-if [ ! -f "$JSON_sh" ]; then
-	curl --silent -o "$JSON_sh" \
-		"https://raw.githubusercontent.com/dominictarr/JSON.sh/master/JSON.sh" \
-			|| fail "couldn't download JSON.sh"
-fi
-
-[ -x "$JSON_sh" ] || chmod +x "$JSON_sh"
-
-if [ -z "$1" ]; then
-	fail "usage: $0 ip-address"
-else
-	IP_ADDRESS="$1"
-fi
-
 req() {
 	curl --fail --silent "$@" || \
-		fail "invalid request"
-}
-
-get_listing() {
-	REQ="email=$EMAIL&token=$TOKEN&domain=$DOMAIN"
-	JSON=$(req -d "$REQ" "https://i.hostker.com/api/dnsGetRecords")
-	ALL=$(echo "$JSON" | "$JSON_sh" -b)
-
-	# Fine the line for the domain that include the name we've configure
-	LINE=$(echo "$ALL" | grep '\["records",[0-9]\+,"header"\]' | \
-		grep "\"$HEADER\"")
-
-	# The index of this record is the 2nd field...
-	INDEX=$(echo "$LINE" | cut -d, -f2)
-
-	# Use the index to find the record's id
-	ID_LINE=$(echo "$ALL" | grep "\[\"records\",$INDEX,\"id\"\]")
-	
-	ID=$(echo "$ID_LINE" | cut -f2 | tr -d '"')
-	echo "$ID"
-}
-
-create_record() {
-	REQ="email=$EMAIL&token=$TOKEN&domain=$DOMAIN&header=$HEADER&type=A&data=$IP_ADDRESS&ttl=$TTL"
-	req -d "$REQ" "https://i.hostker.com/api/dnsAddRecord"
+		fail "无效请求"
 }
 
 update_record() {
@@ -81,15 +24,31 @@ update_record() {
 	req -d "$REQ" "https://i.hostker.com/api/dnsEditRecord"
 }
 
-EXISTING=$(get_listing)
-
-if [ -z "$EXISTING" ]; then
-	create_record &>/dev/null || \
-		fail "couldn't create record"
+if [ -z "$1" ]; then
+	fail "已使用IP: $0"
 else
-	update_record "$EXISTING" &>/dev/null || \
-		fail "couldn't update existing record"
+	IP_ADDRESS="$1"
 fi
 
-/sbin/ddns_custom_update 1
+REQ="email=$EMAIL&token=$TOKEN&domain=$DOMAIN"
+JSON=$(req -d "$REQ" "https://i.hostker.com/api/dnsGetRecords")
+ALL=$(echo "$JSON" | "$JSON_sh" -b -l)
+LINE=$(echo "$ALL" | grep '\["records",[0-9]\+,"header"\]' | \
+	grep "\"$HEADER\"")
+INDEX=$(echo "$LINE" | cut -d, -f2)
+ID_LINE=$(echo "$ALL" | grep "\[\"records\",$INDEX,\"id\"\]")
+ID=$(echo "$ID_LINE" | cut -f2 | tr -d '"')
+
+if [ -z ${ID} ]; then
+	echo "查找ID: 失败!!"
+	/sbin/ddns_custom_updated 0
+	exit 1
+else
+	echo "查找ID: 成功! ID: ${ID}"
+	update_record ${ID} &>/dev/null || \
+		fail "无法更新记录"
+	echo "更新成功!"
+fi
+
+/sbin/ddns_custom_updated 1
 exit 0
